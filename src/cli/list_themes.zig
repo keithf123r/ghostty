@@ -54,13 +54,13 @@ fn printColorKey(
         .@"cell-foreground" => "cell-foreground",
         .@"cell-background" => "cell-background",
     } else "(unset)";
-    
+
     const effective = switch (terminal_color orelse .@"cell-foreground") {
         .color => |col| col,
         .@"cell-foreground" => fg,
         .@"cell-background" => bg,
     };
-    
+
     if (terminal_color) |c| {
         switch (c) {
             .color => try writer.print("{s}{s}\n", .{ prefix, configured }),
@@ -164,7 +164,9 @@ const ThemeListElement = struct {
 };
 
 /// The `list-themes` command is used to preview or list all the available
-/// themes for Ghostty.
+/// themes for Ghostty. The command prints a template and preview of each theme,
+/// including cursor and selection colors (cursor-color, cursor-text,
+/// selection-background, selection-foreground).
 ///
 /// If this command is run from a TTY, a TUI preview of the themes will be
 /// shown. While in the preview, `F1` will bring up a help screen and `ESC` will
@@ -173,7 +175,8 @@ const ThemeListElement = struct {
 ///
 /// If this command is not run from a TTY, or the output is piped to another
 /// command, a plain list of theme names will be printed to the screen. A plain
-/// list can be forced using the `--plain` CLI flag.
+/// list can be forced using the `--plain` CLI flag. In plain output mode, the
+/// template includes cursor and selection colors for each theme.
 ///
 /// Two different directories will be searched for themes.
 ///
@@ -275,13 +278,13 @@ pub fn run(gpa_alloc: std.mem.Allocator) !u8 {
             try stdout.print("{s} ({s}) {s}\n", .{ theme.theme, @tagName(theme.location), theme.path })
         else
             try stdout.print("{s} ({s})\n", .{ theme.theme, @tagName(theme.location) });
-        
+
         // Load the theme config to get cursor and selection colors
         var config = Config.default(alloc) catch continue;
         defer config.deinit();
-        
+
         config.loadFile(alloc, theme.path) catch continue;
-        
+
         // Print cursor and selection colors
         try printColorKey(stdout, "  cursor-color: ", config.@"cursor-color", config.foreground, config.background);
         try printColorKey(stdout, "  cursor-text: ", config.@"cursor-text", config.foreground, config.background);
@@ -1195,7 +1198,7 @@ const Preview = struct {
                 }
                 next_start += child.height;
             }
-            
+
             // Add cursor and selection color display
             {
                 const child = win.child(.{
@@ -1204,9 +1207,9 @@ const Preview = struct {
                     .width = width,
                     .height = 5,
                 });
-                
+
                 child.fill(.{ .style = standard });
-                
+
                 // Cursor row
                 _ = child.printSegment(
                     .{
@@ -1218,7 +1221,7 @@ const Preview = struct {
                         .col_offset = 2,
                     },
                 );
-                
+
                 // Display cursor-color swatch
                 const cursor_color = resolveCursorColor(config.@"cursor-color", config.foreground, config.background);
                 _ = child.printSegment(
@@ -1244,7 +1247,7 @@ const Preview = struct {
                         .col_offset = 11,
                     },
                 );
-                
+
                 // Display cursor-text swatch
                 const cursor_text = resolveCursorText(config.@"cursor-text", config.foreground, config.background);
                 _ = child.printSegment(
@@ -1270,7 +1273,7 @@ const Preview = struct {
                         .col_offset = 26,
                     },
                 );
-                
+
                 // Selection row
                 _ = child.printSegment(
                     .{
@@ -1282,7 +1285,7 @@ const Preview = struct {
                         .col_offset = 2,
                     },
                 );
-                
+
                 // Display selection-background swatch
                 const selection_bg = resolveSelectionBackground(config.@"selection-background", config.foreground, config.background);
                 _ = child.printSegment(
@@ -1308,7 +1311,7 @@ const Preview = struct {
                         .col_offset = 8,
                     },
                 );
-                
+
                 // Display selection-foreground with sample text
                 const selection_fg = resolveSelectionForeground(config.@"selection-foreground", config.foreground, config.background);
                 _ = child.printSegment(
@@ -1334,10 +1337,10 @@ const Preview = struct {
                         .col_offset = 20,
                     },
                 );
-                
+
                 next_start += child.height;
             }
-            
+
             {
                 const child = win.child(
                     .{
@@ -1884,4 +1887,253 @@ fn shouldIncludeTheme(theme_filter: ColorScheme, theme_config: Config) bool {
     const luminance = 0.2126 * rf + 0.7152 * gf + 0.0722 * bf;
     const is_dark = luminance < 0.5;
     return (theme_filter == .all) or (theme_filter == .dark and is_dark) or (theme_filter == .light and !is_dark);
+}
+
+// ====== TESTS ======
+
+test "resolveCursorColor: unset defaults to foreground" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 255, .g = 255, .b = 255 };
+    const bg = Config.Color{ .r = 0, .g = 0, .b = 0 };
+
+    const result = resolveCursorColor(null, fg, bg);
+    try testing.expectEqual(@as(u8, 255), result.r);
+    try testing.expectEqual(@as(u8, 255), result.g);
+    try testing.expectEqual(@as(u8, 255), result.b);
+}
+
+test "resolveCursorColor: explicit color" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 255, .g = 255, .b = 255 };
+    const bg = Config.Color{ .r = 0, .g = 0, .b = 0 };
+    const cursor_color = Config.TerminalColor{ .color = .{ .r = 128, .g = 64, .b = 32 } };
+
+    const result = resolveCursorColor(cursor_color, fg, bg);
+    try testing.expectEqual(@as(u8, 128), result.r);
+    try testing.expectEqual(@as(u8, 64), result.g);
+    try testing.expectEqual(@as(u8, 32), result.b);
+}
+
+test "resolveCursorColor: cell-foreground reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 200, .g = 100, .b = 50 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+    const cursor_color = Config.TerminalColor.@"cell-foreground";
+
+    const result = resolveCursorColor(cursor_color, fg, bg);
+    try testing.expectEqual(@as(u8, 200), result.r);
+    try testing.expectEqual(@as(u8, 100), result.g);
+    try testing.expectEqual(@as(u8, 50), result.b);
+}
+
+test "resolveCursorColor: cell-background reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 200, .g = 100, .b = 50 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+    const cursor_color = Config.TerminalColor.@"cell-background";
+
+    const result = resolveCursorColor(cursor_color, fg, bg);
+    try testing.expectEqual(@as(u8, 10), result.r);
+    try testing.expectEqual(@as(u8, 20), result.g);
+    try testing.expectEqual(@as(u8, 30), result.b);
+}
+
+test "resolveCursorText: unset defaults to background" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 255, .g = 255, .b = 255 };
+    const bg = Config.Color{ .r = 50, .g = 60, .b = 70 };
+
+    const result = resolveCursorText(null, fg, bg);
+    try testing.expectEqual(@as(u8, 50), result.r);
+    try testing.expectEqual(@as(u8, 60), result.g);
+    try testing.expectEqual(@as(u8, 70), result.b);
+}
+
+test "resolveCursorText: explicit color" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 255, .g = 255, .b = 255 };
+    const bg = Config.Color{ .r = 0, .g = 0, .b = 0 };
+    const cursor_text = Config.TerminalColor{ .color = .{ .r = 64, .g = 128, .b = 192 } };
+
+    const result = resolveCursorText(cursor_text, fg, bg);
+    try testing.expectEqual(@as(u8, 64), result.r);
+    try testing.expectEqual(@as(u8, 128), result.g);
+    try testing.expectEqual(@as(u8, 192), result.b);
+}
+
+test "resolveCursorText: cell-foreground reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 100, .g = 150, .b = 200 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+    const cursor_text = Config.TerminalColor.@"cell-foreground";
+
+    const result = resolveCursorText(cursor_text, fg, bg);
+    try testing.expectEqual(@as(u8, 100), result.r);
+    try testing.expectEqual(@as(u8, 150), result.g);
+    try testing.expectEqual(@as(u8, 200), result.b);
+}
+
+test "resolveCursorText: cell-background reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 100, .g = 150, .b = 200 };
+    const bg = Config.Color{ .r = 25, .g = 35, .b = 45 };
+    const cursor_text = Config.TerminalColor.@"cell-background";
+
+    const result = resolveCursorText(cursor_text, fg, bg);
+    try testing.expectEqual(@as(u8, 25), result.r);
+    try testing.expectEqual(@as(u8, 35), result.g);
+    try testing.expectEqual(@as(u8, 45), result.b);
+}
+
+test "resolveSelectionBackground: unset defaults to foreground" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 220, .g = 210, .b = 200 };
+    const bg = Config.Color{ .r = 20, .g = 30, .b = 40 };
+
+    const result = resolveSelectionBackground(null, fg, bg);
+    try testing.expectEqual(@as(u8, 220), result.r);
+    try testing.expectEqual(@as(u8, 210), result.g);
+    try testing.expectEqual(@as(u8, 200), result.b);
+}
+
+test "resolveSelectionBackground: explicit color" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 255, .g = 255, .b = 255 };
+    const bg = Config.Color{ .r = 0, .g = 0, .b = 0 };
+    const selection_bg = Config.TerminalColor{ .color = .{ .r = 90, .g = 180, .b = 255 } };
+
+    const result = resolveSelectionBackground(selection_bg, fg, bg);
+    try testing.expectEqual(@as(u8, 90), result.r);
+    try testing.expectEqual(@as(u8, 180), result.g);
+    try testing.expectEqual(@as(u8, 255), result.b);
+}
+
+test "resolveSelectionBackground: cell-foreground reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 111, .g = 222, .b = 123 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+    const selection_bg = Config.TerminalColor.@"cell-foreground";
+
+    const result = resolveSelectionBackground(selection_bg, fg, bg);
+    try testing.expectEqual(@as(u8, 111), result.r);
+    try testing.expectEqual(@as(u8, 222), result.g);
+    try testing.expectEqual(@as(u8, 123), result.b);
+}
+
+test "resolveSelectionBackground: cell-background reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 111, .g = 222, .b = 123 };
+    const bg = Config.Color{ .r = 44, .g = 55, .b = 66 };
+    const selection_bg = Config.TerminalColor.@"cell-background";
+
+    const result = resolveSelectionBackground(selection_bg, fg, bg);
+    try testing.expectEqual(@as(u8, 44), result.r);
+    try testing.expectEqual(@as(u8, 55), result.g);
+    try testing.expectEqual(@as(u8, 66), result.b);
+}
+
+test "resolveSelectionForeground: unset defaults to background" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 255, .g = 255, .b = 255 };
+    const bg = Config.Color{ .r = 80, .g = 90, .b = 100 };
+
+    const result = resolveSelectionForeground(null, fg, bg);
+    try testing.expectEqual(@as(u8, 80), result.r);
+    try testing.expectEqual(@as(u8, 90), result.g);
+    try testing.expectEqual(@as(u8, 100), result.b);
+}
+
+test "resolveSelectionForeground: explicit color" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 255, .g = 255, .b = 255 };
+    const bg = Config.Color{ .r = 0, .g = 0, .b = 0 };
+    const selection_fg = Config.TerminalColor{ .color = .{ .r = 33, .g = 66, .b = 99 } };
+
+    const result = resolveSelectionForeground(selection_fg, fg, bg);
+    try testing.expectEqual(@as(u8, 33), result.r);
+    try testing.expectEqual(@as(u8, 66), result.g);
+    try testing.expectEqual(@as(u8, 99), result.b);
+}
+
+test "resolveSelectionForeground: cell-foreground reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 201, .g = 202, .b = 203 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+    const selection_fg = Config.TerminalColor.@"cell-foreground";
+
+    const result = resolveSelectionForeground(selection_fg, fg, bg);
+    try testing.expectEqual(@as(u8, 201), result.r);
+    try testing.expectEqual(@as(u8, 202), result.g);
+    try testing.expectEqual(@as(u8, 203), result.b);
+}
+
+test "resolveSelectionForeground: cell-background reference" {
+    const testing = std.testing;
+    const fg = Config.Color{ .r = 201, .g = 202, .b = 203 };
+    const bg = Config.Color{ .r = 15, .g = 25, .b = 35 };
+    const selection_fg = Config.TerminalColor.@"cell-background";
+
+    const result = resolveSelectionForeground(selection_fg, fg, bg);
+    try testing.expectEqual(@as(u8, 15), result.r);
+    try testing.expectEqual(@as(u8, 25), result.g);
+    try testing.expectEqual(@as(u8, 35), result.b);
+}
+
+test "printColorKey: unset value" {
+    const testing = std.testing;
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+
+    const fg = Config.Color{ .r = 100, .g = 150, .b = 200 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+
+    try printColorKey(writer, "  test-key: ", null, fg, bg);
+    const output = stream.getWritten();
+    try testing.expect(std.mem.indexOf(u8, output, "test-key: (unset) -> #6496C8") != null);
+}
+
+test "printColorKey: explicit color" {
+    const testing = std.testing;
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+
+    const fg = Config.Color{ .r = 100, .g = 150, .b = 200 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+    const test_color = Config.TerminalColor{ .color = .{ .r = 64, .g = 128, .b = 192 } };
+
+    try printColorKey(writer, "  test-key: ", test_color, fg, bg);
+    const output = stream.getWritten();
+    try testing.expect(std.mem.indexOf(u8, output, "test-key: #4080C0") != null);
+}
+
+test "printColorKey: cell-foreground reference" {
+    const testing = std.testing;
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+
+    const fg = Config.Color{ .r = 255, .g = 128, .b = 64 };
+    const bg = Config.Color{ .r = 10, .g = 20, .b = 30 };
+    const test_color = Config.TerminalColor.@"cell-foreground";
+
+    try printColorKey(writer, "  test-key: ", test_color, fg, bg);
+    const output = stream.getWritten();
+    try testing.expect(std.mem.indexOf(u8, output, "test-key: cell-foreground -> #FF8040") != null);
+}
+
+test "printColorKey: cell-background reference" {
+    const testing = std.testing;
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+
+    const fg = Config.Color{ .r = 255, .g = 128, .b = 64 };
+    const bg = Config.Color{ .r = 32, .g = 64, .b = 128 };
+    const test_color = Config.TerminalColor.@"cell-background";
+
+    try printColorKey(writer, "  test-key: ", test_color, fg, bg);
+    const output = stream.getWritten();
+    try testing.expect(std.mem.indexOf(u8, output, "test-key: cell-background -> #204080") != null);
 }
