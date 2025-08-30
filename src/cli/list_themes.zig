@@ -7,6 +7,7 @@ const themepkg = @import("../config/theme.zig");
 const tui = @import("tui.zig");
 const internal_os = @import("../os/main.zig");
 const global_state = &@import("../global.zig").state;
+const terminal = @import("../terminal/main.zig");
 
 const vaxis = @import("vaxis");
 const zf = @import("zf");
@@ -39,6 +40,104 @@ pub const Options = struct {
         return Action.help_error;
     }
 };
+
+/// Helper function to print a color key with its configured and effective values
+fn printColorKey(
+    writer: anytype,
+    prefix: []const u8,
+    terminal_color: ?Config.TerminalColor,
+    fg: Config.Color,
+    bg: Config.Color,
+) !void {
+    const configured = if (terminal_color) |c| switch (c) {
+        .color => |col| try std.fmt.allocPrint(std.heap.page_allocator, "#{X:0>2}{X:0>2}{X:0>2}", .{ col.r, col.g, col.b }),
+        .@"cell-foreground" => "cell-foreground",
+        .@"cell-background" => "cell-background",
+    } else "(unset)";
+    
+    const effective = switch (terminal_color orelse .@"cell-foreground") {
+        .color => |col| col,
+        .@"cell-foreground" => fg,
+        .@"cell-background" => bg,
+    };
+    
+    if (terminal_color) |c| {
+        switch (c) {
+            .color => try writer.print("{s}{s}\n", .{ prefix, configured }),
+            else => try writer.print("{s}{s} -> #{X:0>2}{X:0>2}{X:0>2}\n", .{ prefix, configured, effective.r, effective.g, effective.b }),
+        }
+    } else {
+        try writer.print("{s}{s} -> #{X:0>2}{X:0>2}{X:0>2}\n", .{ prefix, configured, effective.r, effective.g, effective.b });
+    }
+}
+
+/// Resolve cursor-color to effective RGB value
+fn resolveCursorColor(
+    cursor_color: ?Config.TerminalColor,
+    fg: Config.Color,
+    bg: Config.Color,
+) terminal.color.RGB {
+    if (cursor_color) |c| {
+        return switch (c) {
+            .color => |col| col.toTerminalRGB(),
+            .@"cell-foreground" => fg.toTerminalRGB(),
+            .@"cell-background" => bg.toTerminalRGB(),
+        };
+    }
+    // Default to foreground if unset
+    return fg.toTerminalRGB();
+}
+
+/// Resolve cursor-text to effective RGB value
+fn resolveCursorText(
+    cursor_text: ?Config.TerminalColor,
+    fg: Config.Color,
+    bg: Config.Color,
+) terminal.color.RGB {
+    if (cursor_text) |c| {
+        return switch (c) {
+            .color => |col| col.toTerminalRGB(),
+            .@"cell-foreground" => fg.toTerminalRGB(),
+            .@"cell-background" => bg.toTerminalRGB(),
+        };
+    }
+    // Default to background if unset
+    return bg.toTerminalRGB();
+}
+
+/// Resolve selection-background to effective RGB value
+fn resolveSelectionBackground(
+    selection_bg: ?Config.TerminalColor,
+    fg: Config.Color,
+    bg: Config.Color,
+) terminal.color.RGB {
+    if (selection_bg) |c| {
+        return switch (c) {
+            .color => |col| col.toTerminalRGB(),
+            .@"cell-foreground" => fg.toTerminalRGB(),
+            .@"cell-background" => bg.toTerminalRGB(),
+        };
+    }
+    // Default to foreground if unset (inverted)
+    return fg.toTerminalRGB();
+}
+
+/// Resolve selection-foreground to effective RGB value
+fn resolveSelectionForeground(
+    selection_fg: ?Config.TerminalColor,
+    fg: Config.Color,
+    bg: Config.Color,
+) terminal.color.RGB {
+    if (selection_fg) |c| {
+        return switch (c) {
+            .color => |col| col.toTerminalRGB(),
+            .@"cell-foreground" => fg.toTerminalRGB(),
+            .@"cell-background" => bg.toTerminalRGB(),
+        };
+    }
+    // Default to background if unset (inverted)
+    return bg.toTerminalRGB();
+}
 
 const ThemeListElement = struct {
     location: themepkg.Location,
@@ -176,6 +275,18 @@ pub fn run(gpa_alloc: std.mem.Allocator) !u8 {
             try stdout.print("{s} ({s}) {s}\n", .{ theme.theme, @tagName(theme.location), theme.path })
         else
             try stdout.print("{s} ({s})\n", .{ theme.theme, @tagName(theme.location) });
+        
+        // Load the theme config to get cursor and selection colors
+        var config = Config.default(alloc) catch continue;
+        defer config.deinit();
+        
+        config.loadFile(alloc, theme.path) catch continue;
+        
+        // Print cursor and selection colors
+        try printColorKey(stdout, "  cursor-color: ", config.@"cursor-color", config.foreground, config.background);
+        try printColorKey(stdout, "  cursor-text: ", config.@"cursor-text", config.foreground, config.background);
+        try printColorKey(stdout, "  selection-background: ", config.@"selection-background", config.foreground, config.background);
+        try printColorKey(stdout, "  selection-foreground: ", config.@"selection-foreground", config.foreground, config.background);
     }
 
     return 0;
@@ -1084,6 +1195,149 @@ const Preview = struct {
                 }
                 next_start += child.height;
             }
+            
+            // Add cursor and selection color display
+            {
+                const child = win.child(.{
+                    .x_off = x_off,
+                    .y_off = next_start,
+                    .width = width,
+                    .height = 5,
+                });
+                
+                child.fill(.{ .style = standard });
+                
+                // Cursor row
+                _ = child.printSegment(
+                    .{
+                        .text = "Cursor:",
+                        .style = standard_bold,
+                    },
+                    .{
+                        .row_offset = 0,
+                        .col_offset = 2,
+                    },
+                );
+                
+                // Display cursor-color swatch
+                const cursor_color = resolveCursorColor(config.@"cursor-color", config.foreground, config.background);
+                _ = child.printSegment(
+                    .{
+                        .text = "Color: ",
+                        .style = standard,
+                    },
+                    .{
+                        .row_offset = 1,
+                        .col_offset = 4,
+                    },
+                );
+                _ = child.printSegment(
+                    .{
+                        .text = "████",
+                        .style = .{
+                            .fg = .{ .rgb = [_]u8{ cursor_color.r, cursor_color.g, cursor_color.b } },
+                            .bg = bg,
+                        },
+                    },
+                    .{
+                        .row_offset = 1,
+                        .col_offset = 11,
+                    },
+                );
+                
+                // Display cursor-text swatch
+                const cursor_text = resolveCursorText(config.@"cursor-text", config.foreground, config.background);
+                _ = child.printSegment(
+                    .{
+                        .text = "Text: ",
+                        .style = standard,
+                    },
+                    .{
+                        .row_offset = 1,
+                        .col_offset = 20,
+                    },
+                );
+                _ = child.printSegment(
+                    .{
+                        .text = "████",
+                        .style = .{
+                            .fg = .{ .rgb = [_]u8{ cursor_text.r, cursor_text.g, cursor_text.b } },
+                            .bg = bg,
+                        },
+                    },
+                    .{
+                        .row_offset = 1,
+                        .col_offset = 26,
+                    },
+                );
+                
+                // Selection row
+                _ = child.printSegment(
+                    .{
+                        .text = "Selection:",
+                        .style = standard_bold,
+                    },
+                    .{
+                        .row_offset = 3,
+                        .col_offset = 2,
+                    },
+                );
+                
+                // Display selection-background swatch
+                const selection_bg = resolveSelectionBackground(config.@"selection-background", config.foreground, config.background);
+                _ = child.printSegment(
+                    .{
+                        .text = "BG: ",
+                        .style = standard,
+                    },
+                    .{
+                        .row_offset = 4,
+                        .col_offset = 4,
+                    },
+                );
+                _ = child.printSegment(
+                    .{
+                        .text = "████",
+                        .style = .{
+                            .fg = .{ .rgb = [_]u8{ selection_bg.r, selection_bg.g, selection_bg.b } },
+                            .bg = bg,
+                        },
+                    },
+                    .{
+                        .row_offset = 4,
+                        .col_offset = 8,
+                    },
+                );
+                
+                // Display selection-foreground with sample text
+                const selection_fg = resolveSelectionForeground(config.@"selection-foreground", config.foreground, config.background);
+                _ = child.printSegment(
+                    .{
+                        .text = "FG: ",
+                        .style = standard,
+                    },
+                    .{
+                        .row_offset = 4,
+                        .col_offset = 16,
+                    },
+                );
+                _ = child.printSegment(
+                    .{
+                        .text = "Aa",
+                        .style = .{
+                            .fg = .{ .rgb = [_]u8{ selection_fg.r, selection_fg.g, selection_fg.b } },
+                            .bg = .{ .rgb = [_]u8{ selection_bg.r, selection_bg.g, selection_bg.b } },
+                        },
+                    },
+                    .{
+                        .row_offset = 4,
+                        .col_offset = 20,
+                    },
+                );
+                
+                next_start += child.height;
+            }
+            
             {
                 const child = win.child(
                     .{
